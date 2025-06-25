@@ -8,7 +8,7 @@ const BOT_TOKEN = "8187930101:AAFlyd5vSENSK9D_g7QSnDbGCHptKFnNpIw";
 const MONGO_URI =
   "mongodb+srv://harshdvadhavana26:harshdv007@try.j3wxapq.mongodb.net/ntrading?retryWrites=true&w=majority";
 const DB_NAME = "ntrading";
-const COLLECTION_NAME = "telegram";
+const COLLECTION_NAME = "telegrams";
 // ----------------------------------------
 
 // Initialize Express and Telegram bot
