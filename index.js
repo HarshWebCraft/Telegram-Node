@@ -160,6 +160,7 @@
 // app.listen(PORT, () => {
 //   logger.info(`Server running on port ${PORT}`);
 // });
+
 require("dotenv").config();
 const express = require("express");
 const TelegramBot = require("node-telegram-bot-api");
@@ -179,7 +180,7 @@ app.use(express.text()); // Parse raw text bodies as fallback
 
 // Logging setup
 const logger = winston.createLogger({
-  level: "debug", // Changed to debug for more detailed logging
+  level: "debug",
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.printf(
@@ -217,6 +218,12 @@ async function connectMongoDB() {
   }
 }
 
+// Function to validate Telegram bot token format
+function isValidBotToken(token) {
+  const tokenRegex = /^\d+:[A-Za-z0-9_-]{35}$/;
+  return tokenRegex.test(token);
+}
+
 async function initializeBots() {
   logger.debug("Initializing Telegram bots");
   try {
@@ -229,12 +236,19 @@ async function initializeBots() {
     for (const signal of signals) {
       if (signal.ID) {
         logger.debug(`Processing signal ${signal._id} with token ${signal.ID}`);
-        try {
-          const bot = new TelegramBot(signal.ID, { polling: false });
-          bots.set(signal.ID, bot);
-          bot.onText(/\/start/, async (msg) =>
-            handleStart(signal.ID, signal._id, msg)
+        if (!isValidBotToken(signal.ID)) {
+          logger.warn(
+            `⚠️ Invalid bot token format for signal ${signal._id}: ${signal.ID}`
           );
+          continue;
+        }
+        try {
+          const bot = new TelegramBot(signal.ID, { polling: true });
+          bots.set(signal.ID, bot);
+          bot.onText(/\/start/, async (msg) => {
+            logger.debug(`Received /start command for bot token ${signal.ID}`);
+            await handleStart(signal.ID, signal._id, msg);
+          });
           logger.info(
             `✅ Initialized bot for signal ${signal._id} with token ${signal.ID}`
           );
@@ -296,15 +310,29 @@ async function handleStart(botToken, signalId, msg) {
 
   if (!username) {
     logger.warn(`⚠️ No username provided for chatId ${chatId}`);
-    bots
-      .get(botToken)
-      .sendMessage(chatId, "Set a Telegram username to register.");
+    try {
+      await bots
+        .get(botToken)
+        .sendMessage(chatId, "Set a Telegram username to register.");
+      logger.info(`Sent username required message to chatId ${chatId}`);
+    } catch (e) {
+      logger.error(
+        `❌ Error sending username required message to chatId ${chatId}: ${e.message}`
+      );
+    }
     return;
   }
 
   if (!telegramsCollection || !signalsCollection) {
     logger.error("❌ MongoDB collections not initialized");
-    bots.get(botToken).sendMessage(chatId, "DB error. Try later.");
+    try {
+      await bots.get(botToken).sendMessage(chatId, "DB error. Try later.");
+      logger.info(`Sent DB error message to chatId ${chatId}`);
+    } catch (e) {
+      logger.error(
+        `❌ Error sending DB error message to chatId ${chatId}: ${e.message}`
+      );
+    }
     return;
   }
 
@@ -326,7 +354,7 @@ async function handleStart(botToken, signalId, msg) {
       );
       logger.info(`Updated chat_id for user ${username} to ${chatId}`);
       await updateCachedUsers();
-      bots
+      await bots
         .get(botToken)
         .sendMessage(
           chatId,
@@ -337,17 +365,25 @@ async function handleStart(botToken, signalId, msg) {
       logger.warn(
         `⚠️ User ${username} not authorized for signalId ${signalId}`
       );
-      bots
+      await bots
         .get(botToken)
         .sendMessage(chatId, "You're not authorized for this signal.");
+      logger.info(`Sent unauthorized message to chatId ${chatId}`);
     }
   } catch (e) {
     logger.error(
       `❌ Error in /start handler for bot ${botToken}: ${e.message}`
     );
-    bots
-      .get(botToken)
-      .sendMessage(chatId, "An error occurred. Try again later.");
+    try {
+      await bots
+        .get(botToken)
+        .sendMessage(chatId, "An error occurred. Try again later.");
+      logger.info(`Sent error message to chatId ${chatId}`);
+    } catch (err) {
+      logger.error(
+        `❌ Error sending error message to chatId ${chatId}: ${err.message}`
+      );
+    }
   }
 }
 
@@ -417,6 +453,15 @@ app.post("/send_message", async (req, res) => {
         .json({ error: "Invalid signalId or bot token not found" });
     }
     logger.debug(`Found signal ${signalId} with bot token ${signal.ID}`);
+
+    if (!isValidBotToken(signal.ID)) {
+      logger.warn(
+        `⚠️ Invalid bot token format for signal ${signalId}: ${signal.ID}`
+      );
+      return res
+        .status(400)
+        .json({ error: `Invalid bot token for signal ${signalId}` });
+    }
 
     const users = cachedUsersBySignal.get(signalId.toString()) || [];
     logger.debug(`Found ${users.length} users for signalId ${signalId}`);
